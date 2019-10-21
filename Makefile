@@ -42,6 +42,7 @@ LDFLAGS := -L$(SDK_DIR)/lib -L$(SDK_DIR)/ld $(LDFLAGS)
 ifdef DEBUG
   CCFLAGS += -ggdb -O0
   LDFLAGS += -ggdb
+  $(info Debug mode enabled)
 else
   CCFLAGS += -O2
 endif

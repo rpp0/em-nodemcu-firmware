@@ -369,6 +369,27 @@ static int wifi_aes( lua_State* L )
     AES_ECB_encrypt(&ctx, data);
 }
 
+static int wifi_aes_triple( lua_State* L )
+{
+    size_t len;
+    const char *key = luaL_checklstring( L, 1, &len );
+    luaL_argcheck(L, len==16, 1, INVALID_MAC_STR);
+
+    char data[16];
+
+    memset(data, 0, sizeof(data));
+
+    struct AES_ctx ctx;
+    AES_init_ctx(&ctx, key);
+    AES_ECB_encrypt(&ctx, data);
+
+    AES_init_ctx(&ctx, key);
+    AES_ECB_encrypt(&ctx, data);
+
+    AES_init_ctx(&ctx, key);
+    AES_ECB_encrypt(&ctx, data);
+}
+
 // Lua: wifi.setmode(mode, save_to_flash)
 static int wifi_setmode( lua_State* L )
 {
@@ -1952,6 +1973,7 @@ LROT_END( wifi_ap, wifi_ap, 0 )
 LROT_BEGIN(wifi)
   LROT_FUNCENTRY( sha1prf, wifi_sha1prf ) // New
   LROT_FUNCENTRY( aes, wifi_aes ) // New
+  LROT_FUNCENTRY( aestriple, wifi_aes_triple ) // New
   LROT_FUNCENTRY( setmode, wifi_setmode )
   LROT_FUNCENTRY( getmode, wifi_getmode )
   LROT_FUNCENTRY( getdefaultmode, wifi_getdefaultmode )
