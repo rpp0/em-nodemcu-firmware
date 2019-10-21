@@ -5,6 +5,7 @@
 #include "module.h"
 #include "lauxlib.h"
 #include "platform.h"
+//#include "aes.h"
 
 #include <string.h>
 #include <stddef.h>
@@ -332,6 +333,41 @@ static int wifi_setcountry( lua_State* L ){
     return luaL_argerror(L, 1, "Table not found!");
   return 1;
 }
+
+
+int sha1_prf (const u8* key, size_t key_len, const char* label, const char* data, size_t data_len, char* buf, size_t buf_len);
+
+// Lua: wifi.sha1prf(key)
+static int wifi_sha1prf( lua_State* L )
+{
+    size_t len;
+    const char *pmk = luaL_checklstring( L, 1, &len );
+    luaL_argcheck(L, len==32, 1, INVALID_MAC_STR);
+
+    // Do something with PMK
+    const char* label = "Pairwise key expansion";
+    char data[76];
+    char ptk[64];
+
+    memset(data, 0, sizeof(data));
+    sha1_prf(pmk, 32, label, data, 76, ptk, 64);
+}
+
+// Lua: wifi.aes(key)
+/*static int wifi_aes( lua_State* L )
+{
+    size_t len;
+    const char *key = luaL_checklstring( L, 1, &len );
+    luaL_argcheck(L, len==16, 1, INVALID_MAC_STR);
+
+    char data[16];
+
+    memset(data, 0, sizeof(data));
+
+    struct AES_ctx ctx;
+    AES_init_ctx(&ctx, key);
+    AES_ECB_encrypt(&ctx, data);
+}*/
 
 // Lua: wifi.setmode(mode, save_to_flash)
 static int wifi_setmode( lua_State* L )
@@ -1914,6 +1950,8 @@ LROT_END( wifi_ap, wifi_ap, 0 )
 
 
 LROT_BEGIN(wifi)
+  LROT_FUNCENTRY( sha1prf, wifi_sha1prf ) // New
+  //LROT_FUNCENTRY( aes, wifi_aes ) // New
   LROT_FUNCENTRY( setmode, wifi_setmode )
   LROT_FUNCENTRY( getmode, wifi_getmode )
   LROT_FUNCENTRY( getdefaultmode, wifi_getdefaultmode )
