@@ -369,6 +369,7 @@ static int wifi_aes( lua_State* L )
     AES_ECB_encrypt(&ctx, data);
 }
 
+// Lua: wifi.aestriple(key)
 static int wifi_aes_triple( lua_State* L )
 {
     size_t len;
