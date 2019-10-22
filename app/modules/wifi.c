@@ -369,26 +369,57 @@ static int wifi_aes( lua_State* L )
     AES_ECB_encrypt(&ctx, data);
 }
 
-// Lua: wifi.aestriple(key)
-static int wifi_aes_triple( lua_State* L )
+#define ONE asm volatile("nop");
+#define TEN ONE ONE ONE ONE ONE ONE ONE ONE ONE ONE
+#define HUN TEN TEN TEN TEN TEN TEN TEN TEN TEN TEN
+#define THO HUN HUN HUN HUN HUN HUN HUN HUN HUN HUN
+#define TTO THO THO THO THO THO THO THO THO THO THO
+
+volatile unsigned long a;
+#define SNE a = 0; a = 0xffffffff;
+#define SEN SNE SNE SNE SNE SNE SNE SNE SNE SNE SNE
+#define SUN SEN SEN SEN SEN SEN SEN SEN SEN SEN SEN
+#define SHO SUN SUN SUN SUN SUN SUN SUN SUN SUN SUN
+#define STO SHO SHO SHO SHO SHO SHO SHO SHO SHO SHO
+
+// Lua: wifi.aesmany()
+static int wifi_aes_many( lua_State* L )
 {
-    size_t len;
-    const char *key = luaL_checklstring( L, 1, &len );
-    luaL_argcheck(L, len==16, 1, INVALID_MAC_STR);
+    //size_t len;
+    //const char *key = luaL_checklstring( L, 1, &len );
+    //luaL_argcheck(L, len==16, 1, INVALID_MAC_STR);
 
     char data[16];
+    char key[16];
 
     memset(data, 0, sizeof(data));
 
-    struct AES_ctx ctx;
-    AES_init_ctx(&ctx, key);
-    AES_ECB_encrypt(&ctx, data);
+    for(int k = 0; k < 16; k++) {
+        printf("wave\n");
+        for(int i = 0; i < 4096; i++) {
+            THO;
+            SUN;
+            THO;
+            SUN;
+            system_soft_wdt_feed(); // Reset watchdog
+        }
 
-    AES_init_ctx(&ctx, key);
-    AES_ECB_encrypt(&ctx, data);
+        for(int i = 0; i < 1024; i++) {
+            os_get_random(key, 16);
+            printf("aes %02x\n", key[0]);
+            struct AES_ctx ctx;
 
-    AES_init_ctx(&ctx, key);
-    AES_ECB_encrypt(&ctx, data);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            AES_init_ctx(&ctx, key);
+            AES_ECB_encrypt(&ctx, data);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+
+            if(i % 512 == 0)
+                system_soft_wdt_feed();
+        }
+    }
+
+    return 1;
 }
 
 // Lua: wifi.setmode(mode, save_to_flash)
@@ -1974,7 +2005,7 @@ LROT_END( wifi_ap, wifi_ap, 0 )
 LROT_BEGIN(wifi)
   LROT_FUNCENTRY( sha1prf, wifi_sha1prf ) // New
   LROT_FUNCENTRY( aes, wifi_aes ) // New
-  LROT_FUNCENTRY( aestriple, wifi_aes_triple ) // New
+  LROT_FUNCENTRY( aesmany, wifi_aes_many ) // New
   LROT_FUNCENTRY( setmode, wifi_setmode )
   LROT_FUNCENTRY( getmode, wifi_getmode )
   LROT_FUNCENTRY( getdefaultmode, wifi_getdefaultmode )
