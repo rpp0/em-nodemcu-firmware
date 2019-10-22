@@ -1,0 +1,21 @@
+cpu xtensa
+
+# Show up to this many raw bytes of code/data
+show bytes 4
+
+load ./wifi.o elf
+
+area .sysram 0x3fffc000-0x3fffffff rw
+area .bootrom 0x40000000(0x10000) rx
+
+# Hardware registers
+area .dport0 0x3ff0_0000(0x100)   rw
+area .wdev   0x3ff2_0000(0x10000) rw
+area .periph 0x6000_0000(0x10000) rw
+
+# First attempt at loading BootROM binary image and symbols
+# These files came from https://github.com/jcmvbkbc/esp-elf-rom
+load /home/pieter/software/esp8266bootrom/bootrom.bin 0x40000000
+
+[entrypoints]
+load "/home/pieter/software/nodemcu/sdk/esp_iot_sdk_v3.0-e4434aa/ld/eagle.rom.addr.v6.ld"
