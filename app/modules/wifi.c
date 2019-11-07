@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include "user_interface.h"
 #include "wifi_common.h"
+#include "driver/readline.h"
 
 
 #ifdef WIFI_SMART_ENABLE
@@ -375,51 +376,359 @@ static int wifi_aes( lua_State* L )
 #define THO HUN HUN HUN HUN HUN HUN HUN HUN HUN HUN
 #define TTO THO THO THO THO THO THO THO THO THO THO
 
-volatile unsigned long a;
-#define SNE a = 0; a = 0xffffffff;
+//#define SNE asm volatile("xor %0, %1, %2;" : :"r"(a), "r"(a), "r"(b));
+#define SNE asm volatile("xor a2, a2, a3");
 #define SEN SNE SNE SNE SNE SNE SNE SNE SNE SNE SNE
 #define SUN SEN SEN SEN SEN SEN SEN SEN SEN SEN SEN
 #define SHO SUN SUN SUN SUN SUN SUN SUN SUN SUN SUN
 #define STO SHO SHO SHO SHO SHO SHO SHO SHO SHO SHO
 
-// Lua: wifi.aesmany()
-static int wifi_aes_many( lua_State* L )
-{
-    //size_t len;
-    //const char *key = luaL_checklstring( L, 1, &len );
-    //luaL_argcheck(L, len==16, 1, INVALID_MAC_STR);
+static void wave() {
+    for(int i = 0; i < 8; i++) {
+        // Nop train
+        for(int j = 0; j < 4096; j++) {
+            THO;
+        }
 
-    char data[16];
-    char key[16];
+        // Setup registers
+        asm volatile("xor a2, a2, a2" ::: "a2");
+        asm volatile("xor a3, a3, a3" ::: "a3");
+        asm volatile("movi.n a3, -0x1" ::: "a3");
+
+        // XOR train
+        for(int j = 0; j < 4096; j++) {
+            SHO;
+        }
+
+        system_soft_wdt_feed(); // Reset watchdog
+    }
+}
+
+#define RECV_BUFFER_SIZE 1
+void emcap_pkt_ack(char pkt_type, void* payload, unsigned int payload_len, int ack) {
+    char recv_buffer[RECV_BUFFER_SIZE];
+    char send_buffer[5+payload_len];
+
+    unsigned int nl_payload_len = htonl(payload_len);
+
+    // Send command to signal start of trace
+    memcpy(send_buffer, &pkt_type, 1);
+    memcpy(send_buffer+1, &nl_payload_len, 4);
+    if(payload != NULL)
+        memcpy(send_buffer+5, payload, payload_len);
+    for(int i = 0; i < 5+payload_len; i++)
+        platform_uart_send(0, send_buffer[i]);
+
+    // Wait for ack
+    if(ack) {
+        memset(recv_buffer, 0, RECV_BUFFER_SIZE);
+        while(recv_buffer[0] != 'k') {
+            uart_getc(&recv_buffer[0]);
+        }
+    }
+}
+
+static void emcap_create_meta_aes(char* meta, char* key, char* plaintext) {
+    // Build metadata
+    unsigned int nl_len_16 = htonl(16);
+
+    // Plaintext IE
+    meta[0] = 0;
+    memcpy(meta+1, &nl_len_16, 4);
+    memcpy(meta+5, plaintext, 16);
+    // Key IE
+    meta[21] = 1;
+    memcpy(meta+22, &nl_len_16, 4);
+    memcpy(meta+26, key, 16);
+}
+
+static void emcap_create_meta_sha1prf(char* meta, char* pmk, char* data) {
+    // Build metadata
+    unsigned int nl_len_32 = htonl(32);
+    unsigned int nl_len_76 = htonl(76);
+
+    // Plaintext IE
+    meta[0] = 0;
+    memcpy(meta+1, &nl_len_76, 4);
+    memcpy(meta+5, data, 76);
+    // Key IE
+    meta[81] = 1;
+    memcpy(meta+82, &nl_len_32, 4);
+    memcpy(meta+86, pmk, 32);
+}
+
+// Lua: wifi.sha1prfmany()
+static int wifi_sha1prf_many( lua_State* L )
+{
+    int do_wave = luaL_checkinteger( L, 1 );
+    int num_k = luaL_checkinteger( L, 2 );
+    int emcap = luaL_checkinteger( L, 3 );
+    int random_key = luaL_checkinteger( L, 4 );
+    const char* label = "Pairwise key expansion";
+    char data[76];
+    char ptk[64];
+    char pmk[32] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+                    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};
 
     memset(data, 0, sizeof(data));
 
-    for(int k = 0; k < 16; k++) {
-        printf("wave\n");
-        for(int i = 0; i < 4096; i++) {
-            THO;
-            SUN;
-            THO;
-            SUN;
-            system_soft_wdt_feed(); // Reset watchdog
+    if(emcap) {
+        platform_uart_send(0, '\x10'); // Send start signal
+    }
+
+    for(int k = 0; k < num_k; k++) {
+        if(do_wave) {
+            if(!emcap)
+                printf("wave\n");
+            wave();
         }
 
+        if(!emcap)
+            printf("sha1prf\n");
+
         for(int i = 0; i < 1024; i++) {
-            os_get_random(key, 16);
-            printf("aes %02x\n", key[0]);
-            struct AES_ctx ctx;
+            os_get_random(data, 76);
+            if(random_key)
+                os_get_random(pmk, 32);
+            if(emcap) {
+                char meta[118];
+                emcap_create_meta_sha1prf(meta, pmk, data);
+                emcap_pkt_ack(0, meta, 118, 1);
+            }
 
             platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            AES_init_ctx(&ctx, key);
-            AES_ECB_encrypt(&ctx, data);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+
+            sha1_prf(pmk, 32, label, data, 76, ptk, 64);
+
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
             platform_gpio_write(0, PLATFORM_GPIO_LOW);
 
-            if(i % 512 == 0)
+            if(emcap) {
+                emcap_pkt_ack(1, 0, 0, 1);
+            }
+
+            if(i % 16 == 0)
                 system_soft_wdt_feed();
         }
     }
 
     return 1;
+}
+
+// Lua: wifi.aesmany()
+static int wifi_aes_many( lua_State* L )
+{
+    int do_wave = luaL_checkinteger( L, 1 );
+    int num_k = luaL_checkinteger( L, 2 );
+    int emcap = luaL_checkinteger( L, 3 );
+    int random_key = luaL_checkinteger( L, 4 );
+    char plaintext[16];
+    char key[16] = {0x33, 0x22, 0x55, 0x66, 0xa1, 0x90, 0x78, 0x69,
+                    0x00, 0xff, 0x80, 0x40, 0x20, 0x33, 0x22, 0x11};
+
+    memset(plaintext, 0, sizeof(plaintext));
+
+    if(emcap) {
+        platform_uart_send(0, '\x10'); // Send start signal
+    }
+
+    for(int k = 0; k < num_k; k++) {
+        if(do_wave) {
+            if(!emcap)
+                printf("wave\n");
+            wave();
+        }
+
+        if(!emcap)
+            printf("aes\n");
+
+        for(int i = 0; i < 1024; i++) {
+            struct AES_ctx ctx;
+            os_get_random(plaintext, 16);
+            if(random_key)
+                os_get_random(key, 16);
+            if(emcap) {
+                char meta[42];
+                emcap_create_meta_aes(meta, key, plaintext);
+                emcap_pkt_ack(0, meta, 42, 1);
+            }
+
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+
+            AES_init_ctx(&ctx, key);
+            AES_ECB_encrypt(&ctx, plaintext);
+
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+
+            if(emcap) {
+                emcap_pkt_ack(1, 0, 0, 1);
+            }
+
+            if(i % 16 == 0)
+                system_soft_wdt_feed();
+        }
+    }
+
+    return 1;
+}
+
+static int recv_bytes(char* recv_buffer, int num_bytes) {
+    if(num_bytes > 256)
+        return -1;
+
+    for(int i = 0; i < num_bytes; i++) {
+        while(!uart_getc(&recv_buffer[i])); // Important: can return empty char if false!
+    }
+
+    return num_bytes;
+}
+
+static void wait_for_ack(char ack_value) {
+    char recv_buffer[1];
+
+    memset(recv_buffer, 0, 1);
+    while(recv_buffer[0] != ack_value) {
+        uart_getc(&recv_buffer[0]);
+    }
+}
+
+static void read_sha1_data(char* tlvs, int tlvs_length, char* data, char* pmk) {
+    int read_index = 0;
+
+    while (read_index < tlvs_length) {
+        char tlv_type;
+        int tlv_length;
+
+        memcpy(&tlv_type, tlvs+read_index, 1); // Read type
+        read_index += 1;
+        memcpy(&tlv_length, tlvs+read_index, 4); // Read length
+        read_index += 4;
+        tlv_length = ntohl(tlv_length);
+
+        if(tlv_type == '\x00') { // Plaintext
+            memcpy(data, tlvs+read_index, tlv_length);
+            read_index += tlv_length;
+        } else if(tlv_type == '\x01') { // Key
+            memcpy(pmk, tlvs+read_index, tlv_length);
+            read_index += tlv_length;
+        }
+    }
+}
+
+int hmac_sha1(const u8* key, size_t key_len, const u8* data, size_t data_len, u8* mac);
+
+// Lua: wifi.emcap()
+static int wifi_emcap( lua_State* L )
+{
+    char recv_buffer[256];
+
+    platform_uart_send(0, '\x10');
+    wait_for_ack('\x10'); // Eat any garbage left in buffers
+
+    while(1) {
+        memset(recv_buffer, 0, 256);
+        char packet_type = 0;
+        int payload_len = 0;
+        char* payload = recv_buffer+5;
+        recv_bytes(recv_buffer+0, 5);
+        memcpy(&packet_type, recv_buffer+0, 1);
+        memcpy(&payload_len, recv_buffer+1, 4);
+        payload_len = ntohl(payload_len);
+        recv_bytes(payload, payload_len);
+
+        if(packet_type == '\x04') {  // Start SHA1-PRF
+            platform_uart_send(0, '\x11');
+            const char* label = "Pairwise key expansion";
+            char data[76];
+            char pmk[32];
+            char ptk[64];
+            read_sha1_data(payload, payload_len, data, pmk);
+            wait_for_ack('\x11');
+
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+
+            sha1_prf(pmk, 32, label, data, 76, ptk, 64);
+
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+
+            // Just send empty response for now
+            platform_uart_send(0, '\x05');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x40');
+            for(int i = 0; i < 64; i++) {
+                platform_uart_send(0, ptk[i]);
+            }
+            system_soft_wdt_feed();
+        } else if(packet_type == '\x06') { // Start HMAC-SHA1
+            platform_uart_send(0, '\x11'); // Ack support
+            // Emulate SHA1-PRF input so we can reuse input parsing code of SHA1-PRF
+            char data[76];
+            char pmk[32];
+            read_sha1_data(payload, payload_len, data, pmk);
+
+            // Make plaintext
+            char mac[20];
+            char plaintext[100];
+            const char* label = "Pairwise key expansion";
+            memset(plaintext, 0, 100);
+            memcpy(plaintext, label, 22);
+            // Plaintext[22] == 0 (23th byte is \0 from the label)
+            memcpy(plaintext+23, data, 76);
+            // Plaintext[99] == 0
+
+            wait_for_ack('\x11');
+
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            hmac_sha1(pmk, 32, plaintext, 100, mac);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+
+            // Just send empty response for now
+            platform_uart_send(0, '\x07');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x14');
+            for(int i = 0; i < 20; i++) {
+                platform_uart_send(0, mac[i]);
+            }
+            system_soft_wdt_feed();
+        }
+    }
 }
 
 // Lua: wifi.setmode(mode, save_to_flash)
@@ -2006,6 +2315,8 @@ LROT_BEGIN(wifi)
   LROT_FUNCENTRY( sha1prf, wifi_sha1prf ) // New
   LROT_FUNCENTRY( aes, wifi_aes ) // New
   LROT_FUNCENTRY( aesmany, wifi_aes_many ) // New
+  LROT_FUNCENTRY( sha1prfmany, wifi_sha1prf_many ) // New
+  LROT_FUNCENTRY( emcap, wifi_emcap ) // New
   LROT_FUNCENTRY( setmode, wifi_setmode )
   LROT_FUNCENTRY( getmode, wifi_getmode )
   LROT_FUNCENTRY( getdefaultmode, wifi_getdefaultmode )
