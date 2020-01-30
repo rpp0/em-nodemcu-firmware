@@ -404,6 +404,25 @@ static void wave() {
     }
 }
 
+// Lua: wifi.timexors()
+static int wifi_timexors(lua_State* L) {
+    // Setup registers
+    asm volatile("xor a2, a2, a2" ::: "a2");
+    asm volatile("xor a3, a3, a3" ::: "a3");
+    asm volatile("movi.n a3, -0x1" ::: "a3");
+
+
+    platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+    platform_gpio_write(0, PLATFORM_GPIO_LOW);
+    platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+    platform_gpio_write(0, PLATFORM_GPIO_LOW);
+    SHO; // 1000 XORs
+    platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+    platform_gpio_write(0, PLATFORM_GPIO_LOW);
+
+    return 1;
+}
+
 #define RECV_BUFFER_SIZE 1
 void emcap_pkt_ack(char pkt_type, void* payload, unsigned int payload_len, int ack) {
     char recv_buffer[RECV_BUFFER_SIZE];
@@ -662,6 +681,7 @@ static int wifi_emcap( lua_State* L )
             read_sha1_data(payload, payload_len, data, pmk);
             wait_for_ack('\x11');
 
+            //platform_gpio_write(0, PLATFORM_GPIO_HIGH);
             platform_gpio_write(0, PLATFORM_GPIO_HIGH);
             platform_gpio_write(0, PLATFORM_GPIO_LOW);
             platform_gpio_write(0, PLATFORM_GPIO_HIGH);
@@ -670,13 +690,14 @@ static int wifi_emcap( lua_State* L )
 
             sha1_prf(pmk, 32, label, data, 76, ptk, 64);
 
+            //platform_gpio_write(0, PLATFORM_GPIO_LOW);
             platform_gpio_write(0, PLATFORM_GPIO_LOW);
             platform_gpio_write(0, PLATFORM_GPIO_HIGH);
             platform_gpio_write(0, PLATFORM_GPIO_LOW);
             platform_gpio_write(0, PLATFORM_GPIO_HIGH);
             platform_gpio_write(0, PLATFORM_GPIO_LOW);
 
-            // Just send empty response for now
+            // Send result of operation
             platform_uart_send(0, '\x05');
             platform_uart_send(0, '\x00');
             platform_uart_send(0, '\x00');
@@ -717,7 +738,7 @@ static int wifi_emcap( lua_State* L )
             platform_gpio_write(0, PLATFORM_GPIO_HIGH);
             platform_gpio_write(0, PLATFORM_GPIO_LOW);
 
-            // Just send empty response for now
+            // Send result of operation
             platform_uart_send(0, '\x07');
             platform_uart_send(0, '\x00');
             platform_uart_send(0, '\x00');
@@ -2317,6 +2338,7 @@ LROT_BEGIN(wifi)
   LROT_FUNCENTRY( aesmany, wifi_aes_many ) // New
   LROT_FUNCENTRY( sha1prfmany, wifi_sha1prf_many ) // New
   LROT_FUNCENTRY( emcap, wifi_emcap ) // New
+  LROT_FUNCENTRY( timexors, wifi_timexors ) // New
   LROT_FUNCENTRY( setmode, wifi_setmode )
   LROT_FUNCENTRY( getmode, wifi_getmode )
   LROT_FUNCENTRY( getdefaultmode, wifi_getdefaultmode )
