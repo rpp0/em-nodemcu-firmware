@@ -6,6 +6,7 @@
 #include "lauxlib.h"
 #include "platform.h"
 #include "tinyaes.h"
+#include "fingerprint.h"
 
 #include <string.h>
 #include <stddef.h>
@@ -682,20 +683,12 @@ static int wifi_emcap( lua_State* L )
             wait_for_ack('\x11');
 
             //platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
 
+            trigger_high();
             sha1_prf(pmk, 32, label, data, 76, ptk, 64);
+            trigger_low();
 
             //platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
 
             // Send result of operation
             platform_uart_send(0, '\x05');
@@ -726,17 +719,9 @@ static int wifi_emcap( lua_State* L )
 
             wait_for_ack('\x11');
 
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
+            trigger_high();
             hmac_sha1(pmk, 32, plaintext, 100, mac);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
-            platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-            platform_gpio_write(0, PLATFORM_GPIO_LOW);
+            trigger_low();
 
             // Send result of operation
             platform_uart_send(0, '\x07');
