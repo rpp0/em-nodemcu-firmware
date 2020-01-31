@@ -659,8 +659,8 @@ static int wifi_emcap( lua_State* L )
 {
     char recv_buffer[256];
 
-    platform_uart_send(0, '\x10');
-    wait_for_ack('\x10'); // Eat any garbage left in buffers
+    platform_uart_send(0, ACK_TARGET_READY);
+    wait_for_ack(ACK_HOST_READY); // Eat any garbage left in buffers
 
     while(1) {
         memset(recv_buffer, 0, 256);
@@ -673,14 +673,14 @@ static int wifi_emcap( lua_State* L )
         payload_len = ntohl(payload_len);
         recv_bytes(payload, payload_len);
 
-        if(packet_type == '\x04') {  // Start SHA1-PRF
-            platform_uart_send(0, '\x11');
+        if(packet_type == HOST_REQUEST_SHA1PRF) {  // Start SHA1-PRF
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             const char* label = "Pairwise key expansion";
             char data[76];
             char pmk[32];
             char ptk[64];
             read_sha1_data(payload, payload_len, data, pmk);
-            wait_for_ack('\x11');
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
             //platform_gpio_write(0, PLATFORM_GPIO_HIGH);
 
@@ -691,7 +691,7 @@ static int wifi_emcap( lua_State* L )
             //platform_gpio_write(0, PLATFORM_GPIO_LOW);
 
             // Send result of operation
-            platform_uart_send(0, '\x05');
+            platform_uart_send(0, TARGET_RESPONSE_SHA1PRF);
             platform_uart_send(0, '\x00');
             platform_uart_send(0, '\x00');
             platform_uart_send(0, '\x00');
@@ -700,8 +700,8 @@ static int wifi_emcap( lua_State* L )
                 platform_uart_send(0, ptk[i]);
             }
             system_soft_wdt_feed();
-        } else if(packet_type == '\x06') { // Start HMAC-SHA1
-            platform_uart_send(0, '\x11'); // Ack support
+        } else if(packet_type == HOST_REQUEST_HMACSHA1) { // Start HMAC-SHA1
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED); // Ack support
             // Emulate SHA1-PRF input so we can reuse input parsing code of SHA1-PRF
             char data[76];
             char pmk[32];
@@ -717,14 +717,14 @@ static int wifi_emcap( lua_State* L )
             memcpy(plaintext+23, data, 76);
             // Plaintext[99] == 0
 
-            wait_for_ack('\x11');
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
             trigger_high();
             hmac_sha1(pmk, 32, plaintext, 100, mac);
             trigger_low();
 
             // Send result of operation
-            platform_uart_send(0, '\x07');
+            platform_uart_send(0, TARGET_RESPONSE_HMACSHA1);
             platform_uart_send(0, '\x00');
             platform_uart_send(0, '\x00');
             platform_uart_send(0, '\x00');
@@ -733,6 +733,9 @@ static int wifi_emcap( lua_State* L )
                 platform_uart_send(0, mac[i]);
             }
             system_soft_wdt_feed();
+        } else {
+            // Tell host we don't support this method
+            platform_uart_send(0, ACK_TARGET_METHOD_NOT_SUPPORTED);
         }
     }
 }
