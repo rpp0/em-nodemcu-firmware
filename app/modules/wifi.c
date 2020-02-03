@@ -18,6 +18,8 @@
 #include "driver/readline.h"
 
 #include "../openssl/des_openssl.h"
+#include "crypto/sdk-aes.h"
+
 
 #ifdef WIFI_SMART_ENABLE
 #include "smart/smart.h"
@@ -671,7 +673,7 @@ static void wait_for_ack(char ack_value) {
     }
 }
 
-static void read_sha1_data(char* tlvs, int tlvs_length, char* data, char* pmk) {
+static void read_crypto_data(char* tlvs, int tlvs_length, char* plaintext, char* key) {
     int read_index = 0;
 
     while (read_index < tlvs_length) {
@@ -684,11 +686,11 @@ static void read_sha1_data(char* tlvs, int tlvs_length, char* data, char* pmk) {
         read_index += 4;
         tlv_length = ntohl(tlv_length);
 
-        if(tlv_type == '\x00') { // Plaintext
-            memcpy(data, tlvs+read_index, tlv_length);
+        if(tlv_type == TLV_TYPE_PLAINTEXT) { // Plaintext
+            memcpy(plaintext, tlvs+read_index, tlv_length);
             read_index += tlv_length;
-        } else if(tlv_type == '\x01') { // Key
-            memcpy(pmk, tlvs+read_index, tlv_length);
+        } else if(tlv_type == TLV_TYPE_KEY) { // Key
+            memcpy(key, tlvs+read_index, tlv_length);
             read_index += tlv_length;
         }
     }
@@ -717,13 +719,38 @@ static int wifi_emcap( lua_State* L )
         payload_len = ntohl(payload_len);
         recv_bytes(payload, payload_len);
 
-        if(packet_type == HOST_REQUEST_SHA1PRF) {  // Start SHA1-PRF
+        if(packet_type == HOST_REQUEST_AES) { // Start AES
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+            char key[16];
+            char plaintext[16];
+            char ciphertext[16];
+            read_crypto_data(payload, payload_len, plaintext, key);
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+
+            trigger_high();
+            void *ctx = aes_encrypt_init(key, 16);
+            aes_encrypt(ctx, plaintext, ciphertext);
+            aes_encrypt_deinit(ctx);
+            trigger_low();
+
+            // Send result of operation
+            platform_uart_send(0, TARGET_RESPONSE_AES);
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x10');
+            for(int i = 0; i < 16; i++) {
+                platform_uart_send(0, ciphertext[i]);
+            }
+
+            system_soft_wdt_feed();
+        } else if(packet_type == HOST_REQUEST_SHA1PRF) {  // Start SHA1-PRF
             platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             const char* label = "Pairwise key expansion";
             char data[76];
             char pmk[32];
             char ptk[64];
-            read_sha1_data(payload, payload_len, data, pmk);
+            read_crypto_data(payload, payload_len, data, pmk);
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
             //platform_gpio_write(0, PLATFORM_GPIO_HIGH);
@@ -749,7 +776,7 @@ static int wifi_emcap( lua_State* L )
             // Emulate SHA1-PRF input so we can reuse input parsing code of SHA1-PRF
             char data[76];
             char pmk[32];
-            read_sha1_data(payload, payload_len, data, pmk);
+            read_crypto_data(payload, payload_len, data, pmk);
 
             // Make plaintext
             char mac[20];
