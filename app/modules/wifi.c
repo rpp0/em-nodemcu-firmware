@@ -17,6 +17,7 @@
 #include "wifi_common.h"
 #include "driver/readline.h"
 
+#include "../openssl/des_openssl.h"
 
 #ifdef WIFI_SMART_ENABLE
 #include "smart/smart.h"
@@ -371,6 +372,47 @@ static int wifi_aes( lua_State* L )
     AES_ECB_encrypt(&ctx, data);
 }
 
+
+
+// Lua: wifi.openssl_des_ecb(key)
+static int wifi_openssl_des_ecb( lua_State* L )
+{
+    size_t len;
+    const char *keyRaw = luaL_checklstring( L, 1, &len );
+    //memset(data, 0, sizeof(data));
+    const_DES_cblock* inputBlock = (const_DES_cblock*) malloc(sizeof(const_DES_cblock));
+    unsigned char inp[8] = {1,2,3,4,5,6,7,8};
+    memcpy(*inputBlock,inp,8);
+
+    DES_cblock* outputBlock = (DES_cblock*) malloc(sizeof(DES_cblock));
+    DES_key_schedule* ks = (DES_key_schedule*) malloc(sizeof(DES_key_schedule)); // {0xff,0xfe,0xfd,0xfc,0xfb,0xfa,0xf9,0xf8};
+    const_DES_cblock* key = (const_DES_cblock*) malloc(sizeof(const_DES_cblock));
+
+    memcpy(*key, keyRaw, len);
+
+    DES_set_key_unchecked(key,ks);
+    DES_ecb_encrypt(inputBlock, outputBlock, ks, 1);
+
+    printf("Encrypted:");
+    for (int i = 0; i < 8; i++)
+    {
+      printf("%x ",(*outputBlock)[i]);
+    }
+
+    DES_ecb_encrypt(outputBlock, inputBlock, ks, 0);
+    printf("Decrypted:");
+    for (int i = 0; i < 8; i++)
+    {
+      printf("%x ",(*inputBlock)[i]);
+    }
+
+    free(inputBlock);
+    free(outputBlock);
+    free(key);
+    free(ks);
+
+}
+
 #define ONE asm volatile("nop");
 #define TEN ONE ONE ONE ONE ONE ONE ONE ONE ONE ONE
 #define HUN TEN TEN TEN TEN TEN TEN TEN TEN TEN TEN
@@ -652,7 +694,9 @@ static void read_sha1_data(char* tlvs, int tlvs_length, char* data, char* pmk) {
     }
 }
 
+
 int hmac_sha1(const u8* key, size_t key_len, const u8* data, size_t data_len, u8* mac);
+
 
 // Lua: wifi.emcap()
 static int wifi_emcap( lua_State* L )
@@ -733,12 +777,24 @@ static int wifi_emcap( lua_State* L )
                 platform_uart_send(0, mac[i]);
             }
             system_soft_wdt_feed();
-        } else {
+        } else if (packet_type == HOST_REQUEST_DES_OPENSSL) {
+          // DES: https://github.com/openssl/openssl/blob/c6fec81b88131d08c1022504ccf6effa95497afb/crypto/des/des_enc.c (DES_ENCRYPT1)
+          platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED); // Ack support
+          wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+          trigger_high();
+          //DES_ecb_encrypt()
+          trigger_low();
+
+          // TODO!
+        }
+          else {
             // Tell host we don't support this method
             platform_uart_send(0, ACK_TARGET_METHOD_NOT_SUPPORTED);
         }
     }
 }
+
+
 
 // Lua: wifi.setmode(mode, save_to_flash)
 static int wifi_setmode( lua_State* L )
@@ -2322,6 +2378,7 @@ LROT_END( wifi_ap, wifi_ap, 0 )
 
 LROT_BEGIN(wifi)
   LROT_FUNCENTRY( sha1prf, wifi_sha1prf ) // New
+  LROT_FUNCENTRY( openssl_des_ecb, wifi_openssl_des_ecb)
   LROT_FUNCENTRY( aes, wifi_aes ) // New
   LROT_FUNCENTRY( aesmany, wifi_aes_many ) // New
   LROT_FUNCENTRY( sha1prfmany, wifi_sha1prf_many ) // New
