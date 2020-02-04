@@ -389,14 +389,14 @@ static int wifi_openssl_aes_ecb( lua_State* L )
     const char *keyRaw = luaL_checklstring( L, 1, &len );
     int bits = 128;
 
-    // Bits can be set to 128, 192 or 256. 
+    // Bits can be set to 128, 192 or 256.
     if (len != bits/8){
         printf("Wrong sized key or bits.");
         return -1;
     }
 
     AES_KEY* aesKey = (AES_KEY*) malloc(sizeof(AES_KEY));
-    int result = AES_set_encrypt_key(keyRaw, bits, aesKey); 
+    int result = AES_set_encrypt_key(keyRaw, bits, aesKey);
     if (result!=0)
     {
       printf("Failed to set key");
@@ -509,7 +509,7 @@ static int wifi_timexors(lua_State* L) {
     return 1;
 }
 
-#define NUM_TIME_ITERATIONS 32768
+#define NUM_TIME_ITERATIONS 8192
 
 // Lua: wifi.time_function(function_name)
 static int wifi_time_function( lua_State* L )
@@ -533,12 +533,15 @@ static int wifi_time_function( lua_State* L )
         char key[16];
         char plaintext[16];
         char ciphertext[16];
+        AES_KEY aesKey;
 
         rtctime_gettimeofday(&start);
         for(int i = 0; i < NUM_TIME_ITERATIONS; i++) {
-            void *ctx = aes_encrypt_init(key, 16);
-            aes_encrypt(ctx, plaintext, ciphertext);
-            aes_encrypt_deinit(ctx);
+            //void *ctx = aes_encrypt_init(key, 16);
+            //aes_encrypt(ctx, plaintext, ciphertext);
+            //aes_encrypt_deinit(ctx);
+            AES_set_encrypt_key(key, 128, &aesKey);
+            AES_encrypt(plaintext, ciphertext, &aesKey);
         }
         rtctime_gettimeofday(&end);
     } else if(strcmp(function_name, "des_openssl") == 0) {
@@ -926,6 +929,31 @@ static int wifi_emcap( lua_State* L )
           }
 
           system_soft_wdt_feed();
+        } else if (packet_type == HOST_REQUEST_AES_OPENSSL) {
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+            char key[16];
+            char plaintext[16];
+            char ciphertext[16];
+            AES_KEY aesKey;
+            read_crypto_data(payload, payload_len, plaintext, key);
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+
+            trigger_high();
+            AES_set_encrypt_key(key, 128, &aesKey);
+            AES_encrypt(plaintext, ciphertext, &aesKey);
+            trigger_low();
+
+            // Send result of operation
+            platform_uart_send(0, TARGET_RESPONSE_AES_OPENSSL);
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x10');
+            for(int i = 0; i < 16; i++) {
+                platform_uart_send(0, ciphertext[i]);
+            }
+
+            system_soft_wdt_feed();
         } else {
             // Tell host we don't support this method
             platform_uart_send(0, ACK_TARGET_METHOD_NOT_SUPPORTED);
