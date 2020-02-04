@@ -469,6 +469,8 @@ static int wifi_timexors(lua_State* L) {
     return 1;
 }
 
+#define NUM_TIME_ITERATIONS 32768
+
 // Lua: wifi.time_function(function_name)
 static int wifi_time_function( lua_State* L )
 {
@@ -480,31 +482,44 @@ static int wifi_time_function( lua_State* L )
     struct rtc_timeval start;
     struct rtc_timeval end;
     long diff_ns = 0;
-    char key[16];
-    char plaintext[16];
-    char ciphertext[16];
 
     // Reset clock
     struct rtc_timeval reset;
     memset(&reset, 0, sizeof(struct rtc_timeval));
     rtctime_settimeofday(&reset);
 
-    // Average of 8192 executions
+    // Average of NUM_TIME_ITERATIONS executions
     if(strcmp(function_name, "aes") == 0) {
+        char key[16];
+        char plaintext[16];
+        char ciphertext[16];
+
         rtctime_gettimeofday(&start);
-        for(int i = 0; i < 8192; i++) {
+        for(int i = 0; i < NUM_TIME_ITERATIONS; i++) {
             void *ctx = aes_encrypt_init(key, 16);
             aes_encrypt(ctx, plaintext, ciphertext);
             aes_encrypt_deinit(ctx);
         }
         rtctime_gettimeofday(&end);
-        diff_ns = 1e9 * (end.tv_sec - start.tv_sec) + 1e3 * (end.tv_usec - start.tv_usec);
+    } else if(strcmp(function_name, "des_openssl") == 0) {
+        char key[8];
+        char plaintext[8];
+        char ciphertext[8];
+        DES_key_schedule ks;
+        DES_set_key_unchecked((const_DES_cblock*)key, &ks);
+
+        rtctime_gettimeofday(&start);
+        for(int i = 0; i < NUM_TIME_ITERATIONS; i++) {
+            DES_ecb_encrypt((const_DES_cblock*)plaintext, (DES_cblock*)ciphertext, &ks, 1);
+        }
+        rtctime_gettimeofday(&end);
     } else {
         printf("Unknown function '%s'\n", function_name);
         return -1;
     }
 
-    printf("%ld ns per operation\n", diff_ns / 8192);
+    diff_ns = 1e9 * (end.tv_sec - start.tv_sec) + 1e3 * (end.tv_usec - start.tv_usec);
+    printf("%ld ns per operation\n", diff_ns / NUM_TIME_ITERATIONS);
     return 0;
 }
 
@@ -846,15 +861,32 @@ static int wifi_emcap( lua_State* L )
             system_soft_wdt_feed();
         } else if (packet_type == HOST_REQUEST_DES_OPENSSL) {
           // DES: https://github.com/openssl/openssl/blob/c6fec81b88131d08c1022504ccf6effa95497afb/crypto/des/des_enc.c (DES_ENCRYPT1)
-          platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED); // Ack support
+          platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+          DES_key_schedule ks;
+          char key[8];
+          char plaintext[8];
+          char ciphertext[8];
+          read_crypto_data(payload, payload_len, plaintext, key);
           wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+
+          DES_set_key_unchecked((const_DES_cblock*)key, &ks);
+
           trigger_high();
-          //DES_ecb_encrypt()
+          DES_ecb_encrypt((const_DES_cblock*)plaintext, (DES_cblock*)ciphertext, &ks, 1);
           trigger_low();
 
-          // TODO!
-        }
-          else {
+          // Send result of operation
+          platform_uart_send(0, TARGET_RESPONSE_DES_OPENSSL);
+          platform_uart_send(0, '\x00');
+          platform_uart_send(0, '\x00');
+          platform_uart_send(0, '\x00');
+          platform_uart_send(0, '\x08');
+          for(int i = 0; i < 8; i++) {
+              platform_uart_send(0, ciphertext[i]);
+          }
+
+          system_soft_wdt_feed();
+        } else {
             // Tell host we don't support this method
             platform_uart_send(0, ACK_TARGET_METHOD_NOT_SUPPORTED);
         }

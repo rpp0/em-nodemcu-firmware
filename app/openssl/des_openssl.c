@@ -91,7 +91,7 @@ void DES_ecb_encrypt(const_DES_cblock *input, DES_cblock *output,
     l2c(l, out);
     l = ll[1];
     l2c(l, out);
-    l = ll[0] = ll[1] = 0; 
+    l = ll[0] = ll[1] = 0;
 }
 
 void DES_set_key_unchecked(const_DES_cblock *key, DES_key_schedule *schedule)
