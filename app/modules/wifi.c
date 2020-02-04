@@ -18,6 +18,8 @@
 #include "driver/readline.h"
 
 #include "../openssl/des_openssl.h"
+#include "../openssl/aes_openssl.h"
+
 #include "crypto/sdk-aes.h"
 #include "rtc/rtctime.h"
 
@@ -377,6 +379,45 @@ static int wifi_aes( lua_State* L )
 
 
 
+
+// Lua: wifi.openssl_aes_ecb(key)
+// Lots of defines, depending on platform that OpenSSL will run on (used for specific optimizations or related to different datatype sizes).
+// Might influence model when run on different platforms.
+static int wifi_openssl_aes_ecb( lua_State* L )
+{
+    size_t len;
+    const char *keyRaw = luaL_checklstring( L, 1, &len );
+    int bits = 128;
+
+    // Bits can be set to 128, 192 or 256. 
+    if (len != bits/8){
+        printf("Wrong sized key or bits.");
+        return -1;
+    }
+
+    AES_KEY* aesKey = (AES_KEY*) malloc(sizeof(AES_KEY));
+    int result = AES_set_encrypt_key(keyRaw, bits, aesKey); 
+    if (result!=0)
+    {
+      printf("Failed to set key");
+      free(aesKey);
+      return -1;
+    }
+
+    unsigned char plainTextBlock[16] = {0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x10,0x11,0x12,0x13,0x14,0x15,0x16};
+    unsigned char cipherTextBlock[16];
+
+    AES_encrypt(plainTextBlock,cipherTextBlock, aesKey);
+
+    printf("Encrypted:");
+    for (int i = 0; i < 16; i++){
+      printf("%x ",cipherTextBlock[i]);
+    }
+
+    free(aesKey);
+    return 1;
+}
+
 // Lua: wifi.openssl_des_ecb(key)
 static int wifi_openssl_des_ecb( lua_State* L )
 {
@@ -413,7 +454,6 @@ static int wifi_openssl_des_ecb( lua_State* L )
     free(outputBlock);
     free(key);
     free(ks);
-
 }
 
 #define ONE asm volatile("nop");
@@ -2478,6 +2518,7 @@ LROT_END( wifi_ap, wifi_ap, 0 )
 LROT_BEGIN(wifi)
   LROT_FUNCENTRY( sha1prf, wifi_sha1prf ) // New
   LROT_FUNCENTRY( openssl_des_ecb, wifi_openssl_des_ecb)
+  LROT_FUNCENTRY( openssl_aes_ecb, wifi_openssl_aes_ecb)
   LROT_FUNCENTRY( aes, wifi_aes ) // New
   LROT_FUNCENTRY( aesmany, wifi_aes_many ) // New
   LROT_FUNCENTRY( sha1prfmany, wifi_sha1prf_many ) // New
