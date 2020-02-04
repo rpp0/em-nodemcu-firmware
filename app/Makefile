@@ -34,6 +34,7 @@ SUBDIRS= 					\
 	mbedtls 				\
 	platform 				\
 	libc 					\
+	openssl 				\
 	lua 					\
 	lwip 					\
 	task 					\
@@ -68,6 +69,7 @@ COMPONENTS_eagle.app.v6 = 		\
 	task/libtask.a 				\
 	libc/liblibc.a 				\
 	lua/liblua.a 				\
+	openssl/libopensslconvert.a		\
 	lwip/liblwip.a 				\
 	smart/smart.a 				\
 	spiffs/spiffs.a 			\

@@ -8,6 +8,8 @@ enum proto_pkt_type {
     TARGET_RESPONSE_SHA1PRF = 5,
     HOST_REQUEST_HMACSHA1 = 6, // Native HMACSHA1
     TARGET_RESPONSE_HMACSHA1 = 7,
+    HOST_REQUEST_DES_OPENSSL = 8,
+    TARGET_RESPONSE_DES_OPENSSL = 9
 };
 
 enum proto_ack_type {
