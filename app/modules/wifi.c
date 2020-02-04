@@ -18,6 +18,7 @@
 #include "driver/readline.h"
 
 #include "crypto/sdk-aes.h"
+#include "rtc/rtctime.h"
 
 
 #ifdef WIFI_SMART_ENABLE
@@ -424,6 +425,45 @@ static int wifi_timexors(lua_State* L) {
     platform_gpio_write(0, PLATFORM_GPIO_LOW);
 
     return 1;
+}
+
+// Lua: wifi.time_function(function_name)
+static int wifi_time_function( lua_State* L )
+{
+    size_t len;
+    const char *function_name = luaL_checklstring( L, 1, &len );
+    luaL_argcheck(L, ((len>=0 && len<=32) ), 1, "function: length:0-32");
+
+
+    struct rtc_timeval start;
+    struct rtc_timeval end;
+    long diff_ns = 0;
+    char key[16];
+    char plaintext[16];
+    char ciphertext[16];
+
+    // Reset clock
+    struct rtc_timeval reset;
+    memset(&reset, 0, sizeof(struct rtc_timeval));
+    rtctime_settimeofday(&reset);
+
+    // Average of 8192 executions
+    if(strcmp(function_name, "aes") == 0) {
+        rtctime_gettimeofday(&start);
+        for(int i = 0; i < 8192; i++) {
+            void *ctx = aes_encrypt_init(key, 16);
+            aes_encrypt(ctx, plaintext, ciphertext);
+            aes_encrypt_deinit(ctx);
+        }
+        rtctime_gettimeofday(&end);
+        diff_ns = 1e9 * (end.tv_sec - start.tv_sec) + 1e3 * (end.tv_usec - start.tv_usec);
+    } else {
+        printf("Unknown function '%s'\n", function_name);
+        return -1;
+    }
+
+    printf("%ld ns per operation\n", diff_ns / 8192);
+    return 0;
 }
 
 #define RECV_BUFFER_SIZE 1
@@ -2354,6 +2394,7 @@ LROT_BEGIN(wifi)
   LROT_FUNCENTRY( sha1prfmany, wifi_sha1prf_many ) // New
   LROT_FUNCENTRY( emcap, wifi_emcap ) // New
   LROT_FUNCENTRY( timexors, wifi_timexors ) // New
+  LROT_FUNCENTRY( time_function, wifi_time_function ) // New
   LROT_FUNCENTRY( setmode, wifi_setmode )
   LROT_FUNCENTRY( getmode, wifi_getmode )
   LROT_FUNCENTRY( getdefaultmode, wifi_getdefaultmode )
