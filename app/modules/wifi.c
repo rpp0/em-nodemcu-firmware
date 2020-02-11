@@ -456,60 +456,7 @@ static int wifi_openssl_des_ecb( lua_State* L )
     free(ks);
 }
 
-#define ONE asm volatile("nop");
-#define TEN ONE ONE ONE ONE ONE ONE ONE ONE ONE ONE
-#define HUN TEN TEN TEN TEN TEN TEN TEN TEN TEN TEN
-#define THO HUN HUN HUN HUN HUN HUN HUN HUN HUN HUN
-#define TTO THO THO THO THO THO THO THO THO THO THO
-
-//#define SNE asm volatile("xor %0, %1, %2;" : :"r"(a), "r"(a), "r"(b));
-#define SNE asm volatile("xor a2, a2, a3");
-#define SEN SNE SNE SNE SNE SNE SNE SNE SNE SNE SNE
-#define SUN SEN SEN SEN SEN SEN SEN SEN SEN SEN SEN
-#define SHO SUN SUN SUN SUN SUN SUN SUN SUN SUN SUN
-#define STO SHO SHO SHO SHO SHO SHO SHO SHO SHO SHO
-
-static void wave() {
-    for(int i = 0; i < 8; i++) {
-        // Nop train
-        for(int j = 0; j < 4096; j++) {
-            THO;
-        }
-
-        // Setup registers
-        asm volatile("xor a2, a2, a2" ::: "a2");
-        asm volatile("xor a3, a3, a3" ::: "a3");
-        asm volatile("movi.n a3, -0x1" ::: "a3");
-
-        // XOR train
-        for(int j = 0; j < 4096; j++) {
-            SHO;
-        }
-
-        system_soft_wdt_feed(); // Reset watchdog
-    }
-}
-
-// Lua: wifi.timexors()
-static int wifi_timexors(lua_State* L) {
-    // Setup registers
-    asm volatile("xor a2, a2, a2" ::: "a2");
-    asm volatile("xor a3, a3, a3" ::: "a3");
-    asm volatile("movi.n a3, -0x1" ::: "a3");
-
-
-    platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-    platform_gpio_write(0, PLATFORM_GPIO_LOW);
-    platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-    platform_gpio_write(0, PLATFORM_GPIO_LOW);
-    SHO; // 1000 XORs
-    platform_gpio_write(0, PLATFORM_GPIO_HIGH);
-    platform_gpio_write(0, PLATFORM_GPIO_LOW);
-
-    return 1;
-}
-
-#define NUM_TIME_ITERATIONS 8192
+#define NUM_TIME_ITERATIONS 1024
 
 // Lua: wifi.time_function(function_name)
 static int wifi_time_function( lua_State* L )
@@ -554,6 +501,12 @@ static int wifi_time_function( lua_State* L )
         rtctime_gettimeofday(&start);
         for(int i = 0; i < NUM_TIME_ITERATIONS; i++) {
             DES_ecb_encrypt((const_DES_cblock*)plaintext, (DES_cblock*)ciphertext, &ks, 1);
+        }
+        rtctime_gettimeofday(&end);
+    } else if(strcmp(function_name, "trigger") == 0) {
+        rtctime_gettimeofday(&start);
+        for(int i = 0; i < NUM_TIME_ITERATIONS; i++) {
+            wave();
         }
         rtctime_gettimeofday(&end);
     } else {
@@ -796,6 +749,7 @@ static void read_crypto_data(char* tlvs, int tlvs_length, char* plaintext, char*
 
 
 int hmac_sha1(const u8* key, size_t key_len, const u8* data, size_t data_len, u8* mac);
+int sha1_vector(size_t num_elem, const u8 *addr[], const size_t *len, u8 *mac);
 
 
 // Lua: wifi.emcap()
@@ -817,7 +771,7 @@ static int wifi_emcap( lua_State* L )
         payload_len = ntohl(payload_len);
         recv_bytes(payload, payload_len);
 
-        if(packet_type == HOST_REQUEST_AES) { // Start AES
+        if(packet_type == HOST_REQUEST_AES) { // Start native AES
             platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             char key[16];
             char plaintext[16];
@@ -952,6 +906,107 @@ static int wifi_emcap( lua_State* L )
             for(int i = 0; i < 16; i++) {
                 platform_uart_send(0, ciphertext[i]);
             }
+
+            system_soft_wdt_feed();
+        } else if (packet_type == HOST_REQUEST_AES_TINY) {
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+            char key[16];
+            char plaintext[16];
+            char ciphertext[16];
+            struct AES_ctx ctx;
+            read_crypto_data(payload, payload_len, plaintext, key);
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+
+            trigger_high();
+            AES_init_ctx(&ctx, key);
+            AES_ECB_encrypt(&ctx, plaintext);
+            trigger_low();
+
+            // Send result of operation
+            platform_uart_send(0, TARGET_RESPONSE_AES_TINY);
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x10');
+            for(int i = 0; i < 16; i++) {
+                platform_uart_send(0, plaintext[i]);
+            }
+
+            system_soft_wdt_feed();
+        } else if (packet_type == HOST_REQUEST_SHA1) {
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+            char key[1];
+            size_t data_len = 128;
+            char data[data_len];
+            char output[20];
+            const u8 *_addr[1];
+	        size_t _len[1];
+            read_crypto_data(payload, payload_len, data, key);
+            _addr[0] = data;
+            _len[0] = data_len;
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+
+            trigger_high();
+            sha1_vector(1, _addr, _len, output);
+            trigger_low();
+
+            // Send result of operation
+            platform_uart_send(0, TARGET_RESPONSE_SHA1);
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x14');
+            for(int i = 0; i < 20; i++) {
+                platform_uart_send(0, output[i]);
+            }
+
+            system_soft_wdt_feed();
+        } else if (packet_type == HOST_REQUEST_SHA1TRANSFORM) {
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+            char key[1];
+            char data[64];
+            SHA1_CTX ctx;
+            SHA1Init(&ctx);
+            read_crypto_data(payload, payload_len, data, key);
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+
+            trigger_high();
+            SHA1Transform(ctx.state, data);
+            trigger_low();
+
+            // Send result of operation
+            platform_uart_send(0, TARGET_RESPONSE_SHA1TRANSFORM);
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x40');
+            for(int i = 0; i < 64; i++) {
+                platform_uart_send(0, ctx.buffer[i]);
+            }
+
+            system_soft_wdt_feed();
+        } else if (packet_type == HOST_REQUEST_FULLCONNECT) {
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+            char pwd[64];
+            char ssid[64];
+            read_crypto_data(payload, payload_len, ssid, pwd);
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+
+            trigger_high();
+            // TODO
+            //struct station_config sta_conf;
+            //wifi_station_set_config(&sta_conf);
+            //wifi_station_connect();
+            //wait for finish in busy loop
+            //system_soft_wdt_feed();
+            trigger_low();
+
+            // Send result of operation
+            platform_uart_send(0, TARGET_RESPONSE_FULLCONNECT);
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x00');
 
             system_soft_wdt_feed();
         } else {
@@ -2551,7 +2606,6 @@ LROT_BEGIN(wifi)
   LROT_FUNCENTRY( aesmany, wifi_aes_many ) // New
   LROT_FUNCENTRY( sha1prfmany, wifi_sha1prf_many ) // New
   LROT_FUNCENTRY( emcap, wifi_emcap ) // New
-  LROT_FUNCENTRY( timexors, wifi_timexors ) // New
   LROT_FUNCENTRY( time_function, wifi_time_function ) // New
   LROT_FUNCENTRY( setmode, wifi_setmode )
   LROT_FUNCENTRY( getmode, wifi_getmode )

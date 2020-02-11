@@ -12,6 +12,14 @@ enum proto_pkt_type {
     TARGET_RESPONSE_DES_OPENSSL = 9,
     HOST_REQUEST_AES_OPENSSL = 10,
     TARGET_RESPONSE_AES_OPENSSL = 11,
+    HOST_REQUEST_AES_TINY = 12,
+    TARGET_RESPONSE_AES_TINY = 13,
+    HOST_REQUEST_SHA1 = 14,
+    TARGET_RESPONSE_SHA1 = 15,
+    HOST_REQUEST_SHA1TRANSFORM = 16,
+    TARGET_RESPONSE_SHA1TRANSFORM = 17,
+    HOST_REQUEST_FULLCONNECT = 18,
+    TARGET_RESPONSE_FULLCONNECT = 19,    
 };
 
 enum proto_ack_type {
@@ -29,5 +37,6 @@ enum proto_tlv_type {
 
 void trigger_high(void);
 void trigger_low(void);
+void wave(void);
 
 #endif /* FINGERPRINT_H_ */
