@@ -704,7 +704,7 @@ static int wifi_aes_many( lua_State* L )
     return 1;
 }
 
-static int recv_bytes(char* recv_buffer, int num_bytes) {
+static int ICACHE_FLASH_ATTR recv_bytes(char* recv_buffer, int num_bytes) {
     if(num_bytes > 256)
         return -1;
 
@@ -715,7 +715,7 @@ static int recv_bytes(char* recv_buffer, int num_bytes) {
     return num_bytes;
 }
 
-static void wait_for_ack(char ack_value) {
+static void ICACHE_FLASH_ATTR wait_for_ack(char ack_value) {
     char recv_buffer[1];
 
     memset(recv_buffer, 0, 1);
@@ -724,7 +724,7 @@ static void wait_for_ack(char ack_value) {
     }
 }
 
-static void read_crypto_data(char* tlvs, int tlvs_length, char* plaintext, char* key) {
+static void ICACHE_FLASH_ATTR read_crypto_data(char* tlvs, int tlvs_length, char* plaintext, char* key) {
     int read_index = 0;
 
     while (read_index < tlvs_length) {
@@ -750,16 +750,40 @@ static void read_crypto_data(char* tlvs, int tlvs_length, char* plaintext, char*
 
 int hmac_sha1(const u8* key, size_t key_len, const u8* data, size_t data_len, u8* mac);
 int sha1_vector(size_t num_elem, const u8 *addr[], const size_t *len, u8 *mac);
+static os_timer_t fullconnect_timer;
+void emcap_loop();
+//__attribute__((section(".iram0.text")))
 
+void ICACHE_FLASH_ATTR fullconnect_callback(void *arg) {
+    uint8_t state;
 
-// Lua: wifi.emcap()
-static int wifi_emcap( lua_State* L )
-{
+    system_soft_wdt_feed();
+
+    // Disable timer during check
+    os_timer_disarm(&fullconnect_timer);
+
+    // Check if we have an IP
+    state = wifi_station_get_connect_status();
+    if(state == STATION_GOT_IP) {
+        //trigger_low();
+
+        platform_uart_send(0, TARGET_RESPONSE_FULLCONNECT);
+        platform_uart_send(0, '\x00');
+        platform_uart_send(0, '\x00');
+        platform_uart_send(0, '\x00');
+        platform_uart_send(0, '\x01');
+        platform_uart_send(0, 'k'); // Send a 'k' as response if successful connect
+        wifi_station_disconnect();
+        emcap_loop(); // Restart emcap loop
+        return;
+    }
+
+    // Restart timer if no IP yet
+    os_timer_arm(&fullconnect_timer, 1000, 0);
+}
+
+void ICACHE_FLASH_ATTR emcap_loop() {
     char recv_buffer[256];
-
-    platform_uart_send(0, ACK_TARGET_READY);
-    wait_for_ack(ACK_HOST_READY); // Eat any garbage left in buffers
-
     while(1) {
         memset(recv_buffer, 0, 256);
         char packet_type = 0;
@@ -772,18 +796,25 @@ static int wifi_emcap( lua_State* L )
         recv_bytes(payload, payload_len);
 
         if(packet_type == HOST_REQUEST_AES) { // Start native AES
-            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             char key[16];
             char plaintext[16];
             char ciphertext[16];
+            void *ctx;
+            // Warmup
+            ctx = aes_encrypt_init(key, 16);
+            aes_encrypt(ctx, plaintext, ciphertext);
+            aes_encrypt_deinit(ctx);
+            system_soft_wdt_feed();
+
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             read_crypto_data(payload, payload_len, plaintext, key);
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
-            trigger_high();
-            void *ctx = aes_encrypt_init(key, 16);
+            //trigger_high();
+            ctx = aes_encrypt_init(key, 16);
             aes_encrypt(ctx, plaintext, ciphertext);
             aes_encrypt_deinit(ctx);
-            trigger_low();
+            //trigger_low();
 
             // Send result of operation
             platform_uart_send(0, TARGET_RESPONSE_AES);
@@ -797,19 +828,24 @@ static int wifi_emcap( lua_State* L )
 
             system_soft_wdt_feed();
         } else if(packet_type == HOST_REQUEST_SHA1PRF) {  // Start SHA1-PRF
-            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             const char* label = "Pairwise key expansion";
             char data[76];
             char pmk[32];
             char ptk[64];
+
+            // Warmup
+            sha1_prf(pmk, 32, label, data, 76, ptk, 64);
+            system_soft_wdt_feed();
+
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             read_crypto_data(payload, payload_len, data, pmk);
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
             //platform_gpio_write(0, PLATFORM_GPIO_HIGH);
 
-            trigger_high();
+            //trigger_high();
             sha1_prf(pmk, 32, label, data, 76, ptk, 64);
-            trigger_low();
+            //trigger_low();
 
             //platform_gpio_write(0, PLATFORM_GPIO_LOW);
 
@@ -824,15 +860,20 @@ static int wifi_emcap( lua_State* L )
             }
             system_soft_wdt_feed();
         } else if(packet_type == HOST_REQUEST_HMACSHA1) { // Start HMAC-SHA1
-            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED); // Ack support
             // Emulate SHA1-PRF input so we can reuse input parsing code of SHA1-PRF
             char data[76];
             char pmk[32];
+            char mac[20];
+            char plaintext[100];
+
+            // Warmup
+            hmac_sha1(pmk, 32, plaintext, 100, mac);
+            system_soft_wdt_feed();
+
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED); // Ack support
             read_crypto_data(payload, payload_len, data, pmk);
 
             // Make plaintext
-            char mac[20];
-            char plaintext[100];
             const char* label = "Pairwise key expansion";
             memset(plaintext, 0, 100);
             memcpy(plaintext, label, 22);
@@ -842,9 +883,9 @@ static int wifi_emcap( lua_State* L )
 
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
-            trigger_high();
+            //trigger_high();
             hmac_sha1(pmk, 32, plaintext, 100, mac);
-            trigger_low();
+            //trigger_low();
 
             // Send result of operation
             platform_uart_send(0, TARGET_RESPONSE_HMACSHA1);
@@ -858,19 +899,24 @@ static int wifi_emcap( lua_State* L )
             system_soft_wdt_feed();
         } else if (packet_type == HOST_REQUEST_DES_OPENSSL) {
           // DES: https://github.com/openssl/openssl/blob/c6fec81b88131d08c1022504ccf6effa95497afb/crypto/des/des_enc.c (DES_ENCRYPT1)
-          platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
           DES_key_schedule ks;
           char key[8];
           char plaintext[8];
           char ciphertext[8];
+
+          // Warmup
+          DES_set_key_unchecked((const_DES_cblock*)key, &ks);
+          DES_ecb_encrypt((const_DES_cblock*)plaintext, (DES_cblock*)ciphertext, &ks, 1);
+          system_soft_wdt_feed();
+
+          platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
           read_crypto_data(payload, payload_len, plaintext, key);
           wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
+          //trigger_high();
           DES_set_key_unchecked((const_DES_cblock*)key, &ks);
-
-          trigger_high();
           DES_ecb_encrypt((const_DES_cblock*)plaintext, (DES_cblock*)ciphertext, &ks, 1);
-          trigger_low();
+          //trigger_low();
 
           // Send result of operation
           platform_uart_send(0, TARGET_RESPONSE_DES_OPENSSL);
@@ -884,18 +930,24 @@ static int wifi_emcap( lua_State* L )
 
           system_soft_wdt_feed();
         } else if (packet_type == HOST_REQUEST_AES_OPENSSL) {
-            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             char key[16];
             char plaintext[16];
             char ciphertext[16];
             AES_KEY aesKey;
+
+            // Warmup
+            AES_set_encrypt_key(key, 128, &aesKey);
+            AES_encrypt(plaintext, ciphertext, &aesKey);
+            system_soft_wdt_feed();
+
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             read_crypto_data(payload, payload_len, plaintext, key);
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
-            trigger_high();
+            //trigger_high();
             AES_set_encrypt_key(key, 128, &aesKey);
             AES_encrypt(plaintext, ciphertext, &aesKey);
-            trigger_low();
+            //trigger_low();
 
             // Send result of operation
             platform_uart_send(0, TARGET_RESPONSE_AES_OPENSSL);
@@ -909,18 +961,24 @@ static int wifi_emcap( lua_State* L )
 
             system_soft_wdt_feed();
         } else if (packet_type == HOST_REQUEST_AES_TINY) {
-            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             char key[16];
             char plaintext[16];
             char ciphertext[16];
             struct AES_ctx ctx;
+
+            // Warmup
+            AES_init_ctx(&ctx, key);
+            AES_ECB_encrypt(&ctx, plaintext);
+            system_soft_wdt_feed();
+
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             read_crypto_data(payload, payload_len, plaintext, key);
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
-            trigger_high();
+            //trigger_high();
             AES_init_ctx(&ctx, key);
             AES_ECB_encrypt(&ctx, plaintext);
-            trigger_low();
+            //trigger_low();
 
             // Send result of operation
             platform_uart_send(0, TARGET_RESPONSE_AES_TINY);
@@ -934,21 +992,28 @@ static int wifi_emcap( lua_State* L )
 
             system_soft_wdt_feed();
         } else if (packet_type == HOST_REQUEST_SHA1) {
-            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             char key[1];
             size_t data_len = 128;
             char data[data_len];
             char output[20];
             const u8 *_addr[1];
 	        size_t _len[1];
+
+            // Warmup
+            _addr[0] = data;
+            _len[0] = data_len;
+            sha1_vector(1, _addr, _len, output);
+            system_soft_wdt_feed();
+
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             read_crypto_data(payload, payload_len, data, key);
             _addr[0] = data;
             _len[0] = data_len;
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
-            trigger_high();
+            //trigger_high();
             sha1_vector(1, _addr, _len, output);
-            trigger_low();
+            //trigger_low();
 
             // Send result of operation
             platform_uart_send(0, TARGET_RESPONSE_SHA1);
@@ -962,17 +1027,23 @@ static int wifi_emcap( lua_State* L )
 
             system_soft_wdt_feed();
         } else if (packet_type == HOST_REQUEST_SHA1TRANSFORM) {
-            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             char key[1];
             char data[64];
             SHA1_CTX ctx;
             SHA1Init(&ctx);
+
+            // Warmup
+            SHA1Transform(ctx.state, data);
+            system_soft_wdt_feed();
+            SHA1Init(&ctx);
+
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             read_crypto_data(payload, payload_len, data, key);
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
-            trigger_high();
+            //trigger_high();
             SHA1Transform(ctx.state, data);
-            trigger_low();
+            //trigger_low();
 
             // Send result of operation
             platform_uart_send(0, TARGET_RESPONSE_SHA1TRANSFORM);
@@ -986,27 +1057,56 @@ static int wifi_emcap( lua_State* L )
 
             system_soft_wdt_feed();
         } else if (packet_type == HOST_REQUEST_FULLCONNECT) {
-            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+            wifi_station_set_auto_connect(0);
+            wifi_set_opmode(1);
+
+            char ssid[32];
+            memset(ssid, 0, 32);
             char pwd[64];
-            char ssid[64];
+            memset(pwd, 0, 64);
+            system_soft_wdt_feed();
+
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
             read_crypto_data(payload, payload_len, ssid, pwd);
             wait_for_ack(ACK_HOST_CAPTURE_STARTED);
 
-            trigger_high();
-            // TODO
-            //struct station_config sta_conf;
-            //wifi_station_set_config(&sta_conf);
-            //wifi_station_connect();
-            //wait for finish in busy loop
-            //system_soft_wdt_feed();
-            trigger_low();
+            // Prefer to set manually via Lua
+            /*struct station_config sta_conf;
+            memset(&sta_conf, 0, sizeof(struct station_config));
+            memcpy(sta_conf.ssid, ssid, 32);
+            memcpy(sta_conf.password, pwd, 64);
+            sta_conf.bssid_set = 0;
+            wifi_station_set_config(&sta_conf);*/
+
+            //trigger_high();
+            wifi_station_connect();
+
+            // This is some funky stuff
+            os_timer_disarm(&fullconnect_timer);
+            os_timer_setfn(&fullconnect_timer, (os_timer_func_t *)fullconnect_callback, NULL);
+            os_timer_arm(&fullconnect_timer, 1000, 0);
+
+            break; // Exit the emcap loop to hand over control to the connect callback timer
+        } else if (packet_type == HOST_REQUEST_NOISE) {
+            char key[16];
+            char plaintext[16];
+            platform_uart_send(0, ACK_TARGET_METHOD_SUPPORTED);
+            read_crypto_data(payload, payload_len, plaintext, key);
+            wait_for_ack(ACK_HOST_CAPTURE_STARTED);
+
+            //trigger_high();
+            // Do nothing
+            //trigger_low();
 
             // Send result of operation
-            platform_uart_send(0, TARGET_RESPONSE_FULLCONNECT);
+            platform_uart_send(0, TARGET_RESPONSE_NOISE);
             platform_uart_send(0, '\x00');
             platform_uart_send(0, '\x00');
             platform_uart_send(0, '\x00');
-            platform_uart_send(0, '\x00');
+            platform_uart_send(0, '\x10');
+            for(int i = 0; i < 16; i++) { // Send key back to simulate noise from UART
+                platform_uart_send(0, key[i]);
+            }
 
             system_soft_wdt_feed();
         } else {
@@ -1014,6 +1114,15 @@ static int wifi_emcap( lua_State* L )
             platform_uart_send(0, ACK_TARGET_METHOD_NOT_SUPPORTED);
         }
     }
+}
+
+// Lua: wifi.emcap()
+static int wifi_emcap( lua_State* L )
+{
+    platform_uart_send(0, ACK_TARGET_READY);
+    wait_for_ack(ACK_HOST_READY); // Eat any garbage left in buffers
+
+    emcap_loop();
 }
 
 
